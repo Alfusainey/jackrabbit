@@ -47,10 +47,14 @@ import org.apache.jackrabbit.core.id.NodeId;
 import org.apache.jackrabbit.core.security.user.UserImporter.ImportBehavior;
 import org.apache.jackrabbit.core.value.InternalValue;
 import org.apache.jackrabbit.core.xml.AccessControlImporter;
+import org.apache.jackrabbit.core.xml.Importer;
 import org.apache.jackrabbit.core.xml.NodeInfo;
+import org.apache.jackrabbit.core.NodeImpl;
 import org.apache.jackrabbit.core.xml.PropInfo;
 import org.apache.jackrabbit.core.xml.ProtectedNodeImporter;
 import org.apache.jackrabbit.core.xml.PropInfo.MultipleStatus;
+import org.apache.jackrabbit.core.xml.SessionImporter;
+import org.apache.jackrabbit.core.SessionImpl;
 import org.apache.jackrabbit.core.xml.TextValue;
 import org.apache.jackrabbit.server.util.RequestData;
 import org.apache.jackrabbit.spi.Name;
@@ -65,18 +69,18 @@ import org.xml.sax.ContentHandler;
 import org.xml.sax.SAXException;
 import org.xml.sax.helpers.AttributesImpl;
 
+//@formatter:off
 /** <code>JsonDiffHandler</code>... */
 class JsonDiffHandler implements DiffHandler {
 
-	private static final Logger log = LoggerFactory
-			.getLogger(JsonDiffHandler.class);
+	private static final Logger log = LoggerFactory.getLogger(JsonDiffHandler.class);
 
 	private static final String ORDER_POSITION_AFTER = "#after";
 	private static final String ORDER_POSITION_BEFORE = "#before";
 	private static final String ORDER_POSITION_FIRST = "#first";
-	private static final String ORDER_POSITION_LAST = "#last";
-
+	private static final String ORDER_POSITION_LAST = "#last";      
 	private final Session session;
+        private Importer importer;
 	private final ValueFactory vf;
 	private final String requestItemPath;
 	private final RequestData data;
@@ -87,6 +91,9 @@ class JsonDiffHandler implements DiffHandler {
 		this.requestItemPath = requestItemPath;
 		this.data = data;
 		vf = session.getValueFactory();
+                Item parentItem = session.getItem(requestItemPath);
+                importer = new SessionImporter((NodeImpl)parentItem,(SessionImpl)session,
+                                ImportUUIDBehavior.IMPORT_UUID_COLLISION_THROW, new PseudoConfig().getWorkspaceConfig());
 	}
 
 	// --------------------------------------------------------< DiffHandler
@@ -303,6 +310,7 @@ class JsonDiffHandler implements DiffHandler {
 
 		Node parent = (Node) item;
 		try {
+                        importer.start();
 			NodeHandler hndlr = new NodeHandler(parent, nodeName);
 			new JsonParser(hndlr).parse(diffValue);
 		} catch (IOException e) {
@@ -311,6 +319,8 @@ class JsonDiffHandler implements DiffHandler {
 			} else {
 				throw new DiffException(e.getMessage(), e);
 			}
+		}finally {
+                        importer.end();
 		}
 	}
 
@@ -614,7 +624,6 @@ class JsonDiffHandler implements DiffHandler {
 		
 		private Node parent;
 		private String key;
-		private JsopImporter importer;
 		private NamePathResolver resolver;
 		
 		// use for parsing
@@ -632,7 +641,6 @@ class JsonDiffHandler implements DiffHandler {
 			key = nodeName;
 			this.parent = parent;
 			resolver = new DefaultNamePathResolver(session);
-			importer = new ImporterFactory().createImporter(parent, session);
 		}
 		
 		// Import the current node
@@ -682,7 +690,6 @@ class JsonDiffHandler implements DiffHandler {
 		public void object() throws IOException {
 
 			if (!parse.isEmpty()) {
-				// st.peek();
 				if (parse.peek() == OBJECT) {
 					if (!states.empty()) {
 						// process current node first.
@@ -859,7 +866,6 @@ class JsonDiffHandler implements DiffHandler {
 			return value;
 		}
 
-		// method called by JsopImporter
 		@Override
 		public Value getValue(int type, NamePathResolver resolver)
 				throws ValueFormatException, RepositoryException {
@@ -878,7 +884,6 @@ class JsonDiffHandler implements DiffHandler {
 		public void dispose() {
 			// do nothing
 		}
-
 	}
 
 	final class ImportState {

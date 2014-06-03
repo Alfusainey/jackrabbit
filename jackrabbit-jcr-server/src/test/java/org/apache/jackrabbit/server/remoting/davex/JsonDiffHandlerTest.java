@@ -90,7 +90,7 @@ public class JsonDiffHandlerTest extends AbstractJCRTest {
 		target = (NodeImpl) testRootNode;
 	}
 
-    public void testGetItemPath() throws Exception {
+/*    public void testGetItemPath() throws Exception {
         Map<String, String> m = new HashMap<String, String>();
         m.put("abc", "/reqPath/abc");
         m.put("abc/def/ghi", "/reqPath/abc/def/ghi");
@@ -128,7 +128,7 @@ public class JsonDiffHandlerTest extends AbstractJCRTest {
 		
 		Node n = target.getNode("allow");
 		assertEquals(n.getName(), "allow");
-	}
+	}*/
 
 	/*
 	 * Test adding 'rep:policy' policy node as a child node of /testroot/test.
@@ -180,7 +180,7 @@ public class JsonDiffHandlerTest extends AbstractJCRTest {
 	}
 	
 	// Test adding a rep:repoPolicy node directly under the root node.
-	public void testRepoPolicyNodeImport() throws Exception{
+/*	public void testRepoPolicyNodeImport() throws Exception{
 		NodeImpl target = (NodeImpl)sImpl.getRootNode();
 		try{
 			 target.addMixin("rep:RepoAccessControllable");
@@ -198,7 +198,7 @@ public class JsonDiffHandlerTest extends AbstractJCRTest {
 		}finally{
 			superuser.refresh(false);
 		}
-	}
+	}*/
 
 
     
