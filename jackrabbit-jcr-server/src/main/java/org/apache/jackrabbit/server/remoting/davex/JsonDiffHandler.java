@@ -17,31 +17,47 @@
 package org.apache.jackrabbit.server.remoting.davex;
 
 import org.apache.jackrabbit.JcrConstants;
+import org.apache.jackrabbit.commons.webdav.JcrRemotingConstants;
 import org.apache.jackrabbit.commons.webdav.JcrValueType;
 import org.apache.jackrabbit.server.util.RequestData;
+import org.apache.jackrabbit.spi.Name;
+import org.apache.jackrabbit.spi.commons.conversion.DefaultNamePathResolver;
+import org.apache.jackrabbit.spi.commons.conversion.IllegalNameException;
+import org.apache.jackrabbit.spi.commons.conversion.NamePathResolver;
 import org.apache.jackrabbit.commons.json.JsonHandler;
 import org.apache.jackrabbit.commons.json.JsonParser;
+import org.apache.jackrabbit.core.NodeImpl;
+import org.apache.jackrabbit.core.SessionImpl;
+import org.apache.jackrabbit.core.id.NodeId;
+import org.apache.jackrabbit.core.value.InternalValue;
+import org.apache.jackrabbit.core.xml.Importer;
+import org.apache.jackrabbit.core.xml.SessionImporter;
+import org.apache.jackrabbit.core.xml.NodeInfo;
+import org.apache.jackrabbit.core.xml.PropInfo;
+import org.apache.jackrabbit.core.xml.TextValue;
 import org.apache.jackrabbit.util.Text;
+import org.apache.jackrabbit.value.ValueHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.xml.sax.ContentHandler;
-import org.xml.sax.SAXException;
-import org.xml.sax.helpers.AttributesImpl;
 
 import javax.jcr.ImportUUIDBehavior;
 import javax.jcr.Item;
 import javax.jcr.ItemNotFoundException;
+import javax.jcr.NamespaceException;
 import javax.jcr.Node;
 import javax.jcr.NodeIterator;
 import javax.jcr.PropertyType;
 import javax.jcr.RepositoryException;
 import javax.jcr.Session;
+import javax.jcr.UnsupportedRepositoryOperationException;
 import javax.jcr.Value;
 import javax.jcr.ValueFactory;
+import javax.jcr.ValueFormatException;
 import javax.jcr.nodetype.NodeType;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Stack;
 import java.util.LinkedList;
@@ -60,14 +76,21 @@ class JsonDiffHandler implements DiffHandler {
     private final ValueFactory vf;
     private final String requestItemPath;
     private final RequestData data;
-
+    private NamePathResolver resolver;
+    private Importer importer;
+    
     JsonDiffHandler(Session session, String requestItemPath, RequestData data) throws RepositoryException {
-        this.session = session;
-        this.requestItemPath = requestItemPath;
-        this.data = data;
-        vf = session.getValueFactory();
+        this(session, requestItemPath, data, null);
     }
 
+    JsonDiffHandler(Session session, String requestItemPath, RequestData data, Importer importer) throws RepositoryException {
+        this.session = session;
+        resolver = new DefaultNamePathResolver(session);
+        this.requestItemPath = requestItemPath;
+        this.data = data;
+        this.importer = importer;
+        vf = session.getValueFactory();
+    }
     //--------------------------------------------------------< DiffHandler >---
     /**
      * @see DiffHandler#addNode(String, String)
@@ -265,8 +288,10 @@ class JsonDiffHandler implements DiffHandler {
 
         Node parent = (Node) item;
         try {
-            NodeHandler hndlr = new NodeHandler(parent, nodeName);            
+            importer.start();
+            NodeHandler hndlr = new NodeHandler(parent, nodeName);
             new JsonParser(hndlr).parse(diffValue);
+            importer.end();
         } catch (IOException e) {
             if (e instanceof DiffException) {
                 throw (DiffException) e;
@@ -299,62 +324,6 @@ class JsonDiffHandler implements DiffHandler {
         return "/" + Text.implode(queue.toArray(new String[queue.size()]), "/");
     }
     
-    private static Node importNode(Node parent, String nodeName, String ntName,
-                                   String uuid) throws RepositoryException {
-
-        String uri = "http://www.jcp.org/jcr/sv/1.0";
-        String prefix = "sv:";
-
-        ContentHandler ch = parent.getSession().getImportContentHandler(parent.getPath(), ImportUUIDBehavior.IMPORT_UUID_COLLISION_THROW);
-        try {
-            ch.startDocument();
-
-            String nN = "node";
-            AttributesImpl attrs = new AttributesImpl();
-            attrs.addAttribute(uri, "name", prefix + "name", "CDATA", nodeName);
-            ch.startElement(uri, nN, prefix + nN, attrs);
-
-            // primary node type
-            String pN = "property";
-            attrs = new AttributesImpl();
-            attrs.addAttribute(uri, "name", prefix + "name", "CDATA", JcrConstants.JCR_PRIMARYTYPE);
-            attrs.addAttribute(uri, "type", prefix + "type", "CDATA", PropertyType.nameFromValue(PropertyType.NAME));
-            ch.startElement(uri, pN, prefix + pN, attrs);
-            ch.startElement(uri, "value", prefix + "value", new AttributesImpl());
-            char[] val = ntName.toCharArray();
-            ch.characters(val, 0, val.length);
-            ch.endElement(uri, "value", prefix + "value");
-            ch.endElement(uri, pN, prefix + pN);
-
-            // uuid
-            attrs = new AttributesImpl();
-            attrs.addAttribute(uri, "name", prefix + "name", "CDATA", JcrConstants.JCR_UUID);
-            attrs.addAttribute(uri, "type", prefix + "type", "CDATA", PropertyType.nameFromValue(PropertyType.STRING));
-            ch.startElement(uri, pN, prefix + pN, attrs);
-            ch.startElement(uri, "value", prefix + "value", new AttributesImpl());
-            val = uuid.toCharArray();
-            ch.characters(val, 0, val.length);
-            ch.endElement(uri, "value", prefix + "value");
-            ch.endElement(uri, pN, prefix + pN);
-
-            ch.endElement(uri, nN, prefix + nN);
-            ch.endDocument();
-
-        } catch (SAXException e) {
-            throw new RepositoryException(e);
-        }
-
-        Node n = null;
-        NodeIterator it = parent.getNodes(nodeName);
-        while (it.hasNext()) {
-            n = it.nextNode();
-        }
-        if (n == null) {
-            throw new RepositoryException("Internal error: No child node added.");
-        }
-        return n;
-    }
-
     private static void setPrimaryType(Node n, Value[] values) throws RepositoryException, DiffException {
         if (values.length == 1) {
             String ntName = values[0].getString();
@@ -545,7 +514,6 @@ class JsonDiffHandler implements DiffHandler {
     private final class NodeHandler implements JsonHandler {
         private Node parent;
         private String key;
-
         private Stack<ImportItem> st = new Stack<ImportItem>();
 
         private NodeHandler(Node parent, String nodeName) throws IOException {
@@ -554,30 +522,44 @@ class JsonDiffHandler implements DiffHandler {
         }
 
         public void object() throws IOException {
-            ImportNode n = new ImportNode(key);
-            if (!st.isEmpty()) {
-                ImportItem obj = st.peek();
-                if (obj instanceof ImportNode) {
-                    ((ImportNode) obj).addNode(n);
-                } else {
-                    throw new DiffException("Invalid DIFF format: The JSONArray may only contain simple values.");
+            boolean empty = st.empty();
+            if(key.equalsIgnoreCase("property")) {
+                if(!empty) {
+                    ImportItem item = st.peek();
+                    if( item instanceof ImportProperty) {
+                        throw new DiffException("Invalid DIFF format: Cannot nest property Objects.");
+                    }
                 }
+            } else {
+                ImportNode n = new ImportNode(key);
+                if (!empty) {
+                    ImportItem obj = st.peek();
+                    if (obj instanceof ImportNode) {
+                        ((ImportNode) obj).addNode(n);
+                    } else {
+                        throw new DiffException("Invalid DIFF format: The JSONArray may only contain simple values.");
+                    }
+                }
+                st.push(n);
             }
-            st.push(n);
         }
 
         public void endObject() throws IOException {
-            // element on stack must be ImportMvProp since array may only
-            // contain simple values, no arrays/objects are allowed.
-            ImportItem obj = st.pop();
-            if (!((obj instanceof ImportNode))) {
+            // element on stack must either be ImportNode or ImportProperty.
+            ImportItem obj = st.pop();            
+            if (!((obj instanceof ImportNode || obj instanceof ImportProperty))) {
                 throw new DiffException("Invalid DIFF format.");
             }
-            if (st.isEmpty()) {
-                // everything parsed -> start adding all nodes and properties
+            if (st.isEmpty()) {                
+                // Property objects must be child object of node objects.
+                if(!(obj instanceof ImportNode)) {
+                    throw new DiffException("Invalid DIFF format.");
+                }
+             
+                // everything parsed -> start importing all nodes and properties
                 try {
-                    obj.createItem(parent);                    
-                } catch (RepositoryException e) {
+                    ((ImportNode)obj).processNode();
+                } catch (Exception e) {
                     log.error(e.getMessage());
                     throw new DiffException(e.getMessage(), e);
                 }
@@ -598,7 +580,7 @@ class JsonDiffHandler implements DiffHandler {
         public void endArray() throws IOException {
             // element on stack must be ImportMvProp since array may only
             // contain simple values, no arrays/objects are allowed.
-            ImportItem obj = st.pop();
+            ImportItem obj = st.peek();
             if (!((obj instanceof ImportMvProp))) {
                 throw new DiffException("Invalid DIFF format: The JSONArray may only contain simple values.");
             }
@@ -614,12 +596,11 @@ class JsonDiffHandler implements DiffHandler {
         }
 
         public void value(boolean value) throws IOException {
-            value(vf.createValue(value));
+            value(vf.createValue(value));;
         }
 
         public void value(long value) throws IOException {
-            Value v = vf.createValue(value);
-            value(v);
+            value(vf.createValue(value));
         }
 
         public void value(double value) throws IOException {
@@ -627,53 +608,95 @@ class JsonDiffHandler implements DiffHandler {
         }
                 
         private void value(Value v) throws IOException {
+            String value = null;
+            try {
+                value = v.getString();
+            } catch (RepositoryException e) {
+                // should never get here. Value.getString() should always succeed.
+                log.error(e.getMessage());
+            }
+
             ImportItem obj = st.peek();
-            if (obj instanceof ImportMvProp) {
-                ((ImportMvProp) obj).values.add(v);
+            // Type of the property
+            if (key.equalsIgnoreCase("type")) {
+                if(obj instanceof ImportProperty) {
+                    ((ImportProperty)obj).setType(value);
+                } else {
+                    throw new DiffException("Invalid DIFF format: Only property objects have types.");
+                }
             } else {
-                ((ImportNode) obj).addProp(new ImportProp(key, v));
+                if (obj instanceof ImportMvProp) {
+                    ((ImportMvProp) obj).values.add(value);   
+                } else { // single-valued property. FIXME: not allowed if ImportProp is already on stack.                                          
+                    ImportProp prop = new ImportProp(key, value);                                                            
+                    ((ImportNode)obj).addProp(prop);                                      
+                    st.push(prop);                 
+                } 
             }
         }
     }
 
-    private abstract class ImportItem {
+    // >---------------------------- Utility methods for Importing Items
+    // --------->
+    
+    public Name stringToName(String strValue) {
+        Name name = null;
+        if(strValue != null) {
+            try {
+                name = resolver.getQName(strValue);
+            } catch (IllegalNameException e) {
+                log.error(e.getMessage());
+            } catch (NamespaceException e) {
+                log.error(e.getMessage());
+            } 
+        }
+        return name;
+    }
+    
+    public Name[] stringToName(List<String> lst) {
+        List<Name> names = new ArrayList<Name>();
+        for(String str : lst) {
+            names.add(stringToName(str));
+        }
+        return names.toArray(new Name[names.size()]);
+    }
+    
+    private static abstract class ImportItem {
         final String name;
+        protected static List<PropInfo> props;
+        
         private ImportItem(String name) throws IOException {
             if (name == null) {
                 throw new DiffException("Invalid DIFF format: NULL key.");
             }
             this.name = name;
+            props = new ArrayList<PropInfo>();
         }
 
-        abstract void createItem(Node parent) throws RepositoryException;
+        abstract void createItemInfo() throws Exception;
     }
     
     private final class ImportNode extends ImportItem {
         private String ntName;
         private String uuid;
-
+        private ImportMvProp mixin;
+        
+        // Item information.
+        private NodeInfo nodeInfo;
+        
         private List<ImportNode> childN = new ArrayList<ImportNode>();
-        private List<ImportItem> childP = new ArrayList<ImportItem>();
+        private List<ImportProperty> childP = new ArrayList<ImportProperty>();
 
         private ImportNode(String name) throws IOException {
             super(name);
         }
-
+        
         void addProp(ImportProp prop) {
-            if (prop.name.equals(JcrConstants.JCR_PRIMARYTYPE)) {
-                try {
-                    ntName = (prop.value == null) ? null : prop.value.getString();
-                } catch (RepositoryException e) {
-                    // should never get here. Value.getString() should always succeed.
-                    log.error(e.getMessage());
-                }
-            } else if (prop.name.equals(JcrConstants.JCR_UUID)) {
-                try {
-                    uuid = (prop.value == null) ? null : prop.value.getString();
-                } catch (RepositoryException e) {
-                    // should never get here. Value.getString() should always succeed.
-                    log.error(e.getMessage());
-                }
+            if (prop.name.equals(JcrConstants.JCR_PRIMARYTYPE)) {                    
+                ntName = (prop.value == null) ? null : prop.value;
+                
+            } else if (prop.name.equals(JcrConstants.JCR_UUID)) {              
+                uuid = (prop.value == null) ? null : prop.value;
             } else {
                 // regular property
                 childP.add(prop);
@@ -681,61 +704,177 @@ class JsonDiffHandler implements DiffHandler {
         }
 
         void addProp(ImportMvProp prop) {
-            childP.add(prop);
-        }
+            if(prop.name.equals(JcrConstants.JCR_MIXINTYPES)) {
+                mixin = prop;
+            } else {
+                // regular multi-valued property
+                childP.add(prop);
+            }
+        }       
 
         void addNode(ImportNode node) {
             childN.add(node);
         }
 
+        List<String> getMixins() {
+            List<String> mixins;
+            if(mixin != null) {
+                mixins = new ArrayList<String>();
+                for(String mixinName : mixin.values) {
+                    mixins.add(mixinName);
+                }
+                return mixins;
+            }
+            return null;
+        }
+        /**
+         * Information about the node to be imported
+         */
         @Override
-        void createItem(Node parent) throws RepositoryException {
-            Node n;
-            if (uuid == null) {
-                n = (ntName == null) ? parent.addNode(name) : parent.addNode(name,  ntName);
-            } else {
-                n = importNode(parent, name, ntName, uuid);
+        void createItemInfo() throws Exception {
+            Name nodeName = stringToName(name);
+            Name nodeType = stringToName(ntName);
+
+            Name[] ms = null;
+            List<String> mixins = getMixins();
+            if(mixins != null) {
+               ms = stringToName(mixins);
             }
-            // create all properties
-            for (ImportItem obj : childP) {
-                obj.createItem(n);
+            
+            NodeId id = null;
+            if(uuid != null) {
+                id = NodeId.valueOf(uuid);
             }
-            // recursively create all child nodes
-            for (ImportItem obj : childN) {
-                obj.createItem(n);
+            nodeInfo = new NodeInfo(nodeName, nodeType, ms, id);
+            
+            // 1. instantiate a nodeInfo object.
+            // 2. processNode should pick up the nodeInfo instance
+            // 3. call processNode in the addNode(string, string, string) method;
+        }
+        
+        NodeInfo getNodeInfo() throws Exception{
+            createItemInfo();
+            return nodeInfo;
+        }
+
+        List<PropInfo> getPropInfos() throws Exception{
+            for(ImportProperty prop : childP) {
+                prop.createItemInfo();
+            }
+            return props;
+        }
+
+        void processNode() throws Exception {
+            try {
+                importer.startNode(getNodeInfo(), getPropInfos());
+                props.clear();
+                
+                // process all child nodes.
+                for(ImportNode node : childN) {
+                    node.processNode();
+                }                
+                importer.endNode(getNodeInfo());
+            }catch(RepositoryException e) {
+                throw new DiffException(e.getMessage());
             }
         }
     }
 
-    private final class ImportProp extends ImportItem  {
-        private final Value value;
-
-        private ImportProp(String name, Value v) throws IOException {
+    abstract class ImportProperty extends ImportItem {
+        String type;
+        protected PropInfo propInfo;
+        
+        ImportProperty(String name) throws IOException {
+            super(name);
+        }
+        
+        void setType(String type) {
+            this.type = type;
+        }
+        
+        /**
+         * Template for creating a property information object.
+         */
+        void createItemInfo() throws Exception {
+            try {
+                TextValue[] txtValue = getTextValues();
+                Name propName = stringToName(name);
+                propInfo = new PropInfo(propName, PropertyType.valueFromName(type), txtValue);
+                props.add(propInfo);
+            } catch(Exception e) {
+                if(e instanceof IllegalArgumentException) {
+                    throw new DiffException("Invalid Diff: UNKNOWN property type ("+type+")");  
+                }else {
+                    throw e;
+                }                
+            }
+        }
+        abstract TextValue[] getTextValues();
+    }
+    
+    private final class ImportProp extends ImportProperty  {
+        private final String value;
+        
+        private ImportProp(String name, String v) throws IOException {
             super(name);
             this.value = v;
         }
-
+        
         @Override
-        void createItem(Node parent) throws RepositoryException {
-            parent.setProperty(name, value);
+        TextValue[] getTextValues() {
+            TextValue[] txtValue = {new StringValue(value)};
+            return txtValue;
         }
     }
 
-    private final class ImportMvProp extends ImportItem  {
-        private List<Value> values = new ArrayList<Value>();
+    private final class ImportMvProp extends ImportProperty  {
+        private List<String> values = new ArrayList<String>();
 
         private ImportMvProp(String name) throws IOException {
             super(name);
         }
 
+        void addValue(String v) {
+            values.add(v);
+        }
+
         @Override
-        void createItem(Node parent) throws RepositoryException {
-            Value[] vls = values.toArray(new Value[values.size()]);
-            if (JcrConstants.JCR_MIXINTYPES.equals(name)) {
-                setMixins(parent, vls);
-            } else {
-                parent.setProperty(name, vls);            
+        TextValue[] getTextValues() {
+            List<TextValue> values = new ArrayList<TextValue>();
+            for(String v : this.values) {
+                values.add(new StringValue(v));
             }
+            return values.toArray(new TextValue[values.size()]);
         }
     }
+    
+    // <------------------------- StringValue ---------------------------------------<<<<
+    // FIXME: The StringValue concrete class in core/xml already provides implementation for these methods but cannot simply be
+    //        accessed outside of its package. Is it better to make it accessible here for json import as well?
+    private final class StringValue implements TextValue {
+        String value;
+        
+        StringValue(String v) {
+            value = v;
+        }
+        
+        @Override
+        public Value getValue(int type, NamePathResolver resolver) throws ValueFormatException, RepositoryException { 
+            return (value == null ) ? null : ValueHelper.deserialize(value, type, false, vf);
+        }
+
+        @Override
+        public InternalValue getInternalValue(int type)
+                throws ValueFormatException, RepositoryException {
+            // TODO Auto-generated method stub
+            return null;
+        }
+
+        @Override
+        public void dispose() {
+            // TODO Auto-generated method stub
+        }
+        
+    }
+    
 }
