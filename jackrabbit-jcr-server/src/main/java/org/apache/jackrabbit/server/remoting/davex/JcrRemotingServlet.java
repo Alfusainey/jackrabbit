@@ -19,6 +19,7 @@ package org.apache.jackrabbit.server.remoting.davex;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
@@ -236,7 +237,8 @@ public abstract class JcrRemotingServlet extends JCRWebdavServerServlet {
     public static final String INIT_PARAM_BATCHREAD_CONFIG = "batchread-config";
 
     /**
-     * the 'protectedhandlers-config' init paramter.
+     * the 'protectedhandlers-config' init paramter. this parameter contains the XML
+     * configuration file for protected item remove handlers. 
      */
     public static final String INIT_PARAM_PROTECTED_HANDLERS_CONFIG = "protectedhandlers-config";
     
@@ -271,10 +273,11 @@ public abstract class JcrRemotingServlet extends JCRWebdavServerServlet {
         }
 
         String protectedHandlerConfig = getServletConfig().getInitParameter(INIT_PARAM_PROTECTED_HANDLERS_CONFIG);
-        try {
+        
+        try {        	
             protectedRemoveManager = new ProtectedRemoveManager(protectedHandlerConfig);
         } catch (IOException e) {
-            log.debug("Unable to create ProtectedRemoveManager from " + protectedHandlerConfig + ".");
+            log.debug("Unable to create ProtectedRemoveManager from " + protectedHandlerConfig + ".\n "+e.getMessage());
         }
 
         // Determine the configured location for temporary files used when
